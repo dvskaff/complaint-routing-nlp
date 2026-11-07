@@ -1,0 +1,100 @@
+name: Pipeline
+
+# Reads the CFPB narrative archive, trains and evaluates the routing models, finds emerging issues, exports the
+# browser model, and publishes the dashboard, README results and model card. The archive is fixed (the CFPB stopped
+# publishing narratives in August 2026), so the monthly run mostly reuses the cache and checks for new archive files.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "29 10 7 * *" # 10:29 UTC on the 7th of every month
+  workflow_dispatch:
+
+permissions:
+  contents: write # save the cache as a release asset and commit README results
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies (PyTorch CPU build)
+        run: pip install -r requirements-dev.txt
+
+      - name: Test before the real run
+        run: pytest -q
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2
+
+      - name: Restore the cache (sample, embeddings, fine-tuned model, topics) from the last run
+        run: |
+          mkdir -p data
+          if gh release download state --pattern "cache.tar.zst" --dir data; then
+            tar -I zstd -xf data/cache.tar.zst -C data && rm data/cache.tar.zst && ls -la data/cache
+          else
+            echo "No cache yet: the first run downloads the archive files and fine-tunes the model (1.5 to 3 hours)."
+          fi
+
+      - name: Get the browser runtime (transformers.js + ONNX Runtime WebAssembly, from npm)
+        run: bash scripts/fetch_web_runtime.sh
+
+      - name: Run the pipeline
+        timeout-minutes: 300
+        run: python -m complaints.pipeline
+        env:
+          PYTHONPATH: src
+
+      - name: Save the cache for the next run (also after a failure, so finished steps are kept)
+        if: always() && hashFiles('data/cache/samples.parquet') != ''
+        run: |
+          tar -I "zstd -T0 -10" -cf cache.tar.zst -C data cache
+          ls -lh cache.tar.zst
+          gh release view state > /dev/null 2>&1 || gh release create state --latest=false \
+            --title "Pipeline cache" --notes "Sample, embeddings, fine-tuned model, topics and the last macro-F1."
+          gh release upload state cache.tar.zst --clobber
+
+      - name: Commit README results and model card
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md MODEL_CARD.md
+          if ! git diff --staged --quiet; then
+            git commit -m "Pipeline results"
+            git pull --rebase -X theirs
+            git push
+          fi
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
