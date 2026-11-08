@@ -63,8 +63,8 @@ class Config:
     embedder: str = "sentence-transformers/all-MiniLM-L6-v2"
     base_model: str = "sentence-transformers/all-MiniLM-L6-v2"  # fine-tuned with a classification head
     embed_max_tokens: int = 256
-    max_tokens: int = 192
-    epochs: int = 2
+    max_tokens: int = 256
+    epochs: int = 3
     batch_size: int = 32
     learning_rate: float = 8e-5
     weight_decay: float = 0.01

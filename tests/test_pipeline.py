@@ -14,8 +14,16 @@ def test_pipeline_end_to_end_then_cached(cfg, monkeypatch):
     assert "SYNTHETIC TEST DATA" in page and "Try it: route a complaint" in page
     results = json.loads((site / "results.json").read_text())  # strict JSON: NaN would fail here
     assert results["synthetic"] is True and set(results["scores"]) == {
-        "Majority class", "TF-IDF + logistic regression", "Sentence embeddings + logistic regression",
-        pipeline.FT_NAME}  # fmt: skip
+        "Majority class",
+        "TF-IDF + logistic regression",
+        "Sentence embeddings + logistic regression",
+        pipeline.FT_NAME,
+        pipeline.ENS_NAME,
+    }
+    assert (
+        results["run"]["sparse_months"] == {"2026-08": 2}
+        and results["run"]["window"]["test"][-1] == "2026-07"
+    )
     demo = json.loads((site / "demo.json").read_text())
     assert demo["labels"] == out["run"]["labels"] and len(demo["examples"]) == 6
     assert (site / "models" / demo["model"] / "onnx" / "model_quantized.onnx").exists()

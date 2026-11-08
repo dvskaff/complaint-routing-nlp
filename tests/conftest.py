@@ -27,6 +27,5 @@ def samples(cfg):
 
     make_archive(cfg.data_dir / "fixture")
     archives = data.list_archives(cfg)
-    w = data.plan_window(archives, cfg)
-    df, stats = data.build_samples(cfg, archives, w)
-    return df, w, stats
+    df, stats = data.build_samples(cfg, archives)
+    return df, data.Window(**stats["window"]), stats

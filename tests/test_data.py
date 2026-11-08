@@ -22,12 +22,26 @@ def test_parse_name(name, expected):
 
 def test_window_is_time_ordered(cfg):
     archives = data.list_archives(cfg, page=str(make_archive(cfg.data_dir / "fixture")))
-    w = data.plan_window(archives, cfg)
+    w = data.plan_window(archives, cfg)  # provisional: ends with the newest month any file covers
     assert w.test == ["2026-07", "2026-08"] and w.val == "2026-06"
     assert w.train[-1] < w.val < w.test[0] and len(w.train) == cfg.train_months
     assert w.topics[-1] == "2026-08" and len(w.topics) == cfg.topic_months
-    # only files that reach into the window are downloaded
-    assert [a.name for a in data.needed(archives, w)][0].startswith("CCDB_Export_1_")
+    # spare months are fetched too, in case the newest months turn out to be nearly empty
+    assert [a.name for a in data.candidate_files(archives, cfg)][0].startswith("CCDB_Export_1_")
+
+
+def test_nearly_empty_final_month_is_dropped():
+    counts = {"2026-02": 900, "2026-03": 1000, "2026-04": 950, "2026-05": 1100, "2026-06": 1000, "2026-07": 800,
+              "2026-08": 1}  # fmt: skip
+    assert data.effective_last(counts, "2026-08") == "2026-07"
+    assert data.effective_last({**counts, "2026-08": 400}, "2026-08") == "2026-08"
+    assert data.effective_last({"2026-08": 5}, "2026-08") == "2026-08"  # no history: keep it
+
+
+def test_window_follows_the_data(samples):
+    df, w, stats = samples
+    assert w.test == ["2026-06", "2026-07"] and w.val == "2026-05"  # the fixture's August holds 2 complaints
+    assert stats["sparse_months"] == {"2026-08": 2} and df["month"].max() == "2026-07"
 
 
 def test_known_list_when_page_has_no_links(cfg, tmp_path):
@@ -41,6 +55,10 @@ def test_known_list_when_page_has_no_links(cfg, tmp_path):
 def test_clean_text_and_dedupe_key():
     t = data.clean_text("On XX/XX/XXXX I paid {$1,200.50} to XXXX XXXX bank , then XXXX.")
     assert t == "On I paid $1,200.50 to bank, then."
+    assert data.clean_text("Paid on XX/XX/year>. Then <scrub> called on year>2026, again.") == (
+        "Paid on. Then called on 2026, again."
+    )
+    assert data.clean_text("If balance > 0 then pay") == "If balance > 0 then pay"
     assert data.dedupe_key("I dispute THIS item!") == data.dedupe_key("i dispute this item")
     assert data.dedupe_key("a") != data.dedupe_key("b")
 
@@ -87,7 +105,7 @@ def test_samples_balanced_natural_and_deterministic(cfg, samples):
     assert stats["rows_read"] > len(df)
     # same sample whatever the chunk size (hash-based ranking)
     sampler = data.Sampler(cfg, w)
-    for a in data.needed(data.list_archives(cfg), w):
+    for a in data.candidate_files(data.list_archives(cfg), cfg):
         path = cfg.data_dir / "raw" / a.name
         data.download(cfg, a, cfg.data_dir / "raw")
         for chunk in data.read_archive(path, chunksize=97):

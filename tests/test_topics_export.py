@@ -8,31 +8,31 @@ import pytest
 from complaints import data, export, models, topics
 
 
-def test_summarize_finds_the_growing_topic(cfg):
+def test_summarize_finds_the_growing_topic_within_its_product(cfg):
     months = [f"2026-{m:02d}" for m in range(1, 7)]
     rows, tp = [], []
     for i, m in enumerate(months):
-        recent = i >= 3
-        for j in range(100):
-            if j < (30 if recent else 5):
-                t, text = 1, "impersonation scam bank refund"
-            elif j < 60:
-                t, text = 0, "credit report dispute bureau"
-            else:
-                t, text = -1, "misc other words here"
-            rows.append(
-                {"month": m, "text": text, "product": "Checking" if t == 1 else "Credit", "company": "Acme"}
-            )
+        scam = 30 if i >= 3 else 5  # of 40 checking complaints a month
+        credit = 60 if i < 3 else 20  # the product mix shifts too: this must not create fake trends
+        spec = [(1, "impersonation scam bank refund", "Checking")] * scam
+        spec += [(2, "overdraft fee charged", "Checking")] * (40 - scam)
+        spec += [(0, "credit report dispute bureau", "Credit")] * credit + [
+            (-1, "misc words here", "Credit")
+        ] * 5
+        for t, text, product in spec:
+            rows.append({"month": m, "text": text, "product": product, "company": "Acme"})
             tp.append(t)
     docs = pd.DataFrame(rows)
     emb = np.random.default_rng(0).normal(size=(len(docs), 8)).astype(np.float32)
     cfg.recent_months, cfg.topic_min_recent_docs = 3, 10
     s = topics.summarize(cfg, docs, emb, np.array(tp), months)
-    assert s["emerging"][0]["topic"] == 1 and s["emerging"][0]["top_product"] == "Checking"
-    assert s["emerging"][0]["recent_share"] == pytest.approx(0.3)
-    assert s["emerging"][0]["base_share"] == pytest.approx(0.05)
-    assert s["fading"][0]["topic"] == 0  # its share fell as the scam topic grew
-    assert abs(s["outlier_share"] - (40 + 40 + 40 + 40 + 40 + 40) / 600) < 1e-9
+    top = s["emerging"][0]
+    assert top["topic"] == 1 and top["top_product"] == "Checking"
+    assert top["recent_share"] == pytest.approx(0.75) and top["base_share"] == pytest.approx(0.125)
+    assert [f["topic"] for f in s["fading"]] == [
+        2
+    ]  # the credit topic is 100% of credit complaints throughout
+    assert s["topics"] == 3
 
 
 def test_keywords_do_not_repeat_words():

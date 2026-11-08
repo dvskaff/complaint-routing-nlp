@@ -30,7 +30,7 @@ PRODUCTS = {
                         "monthly payment went up"]),
     "Money transfer, virtual currency, or money service": (0.065, ["money transfer", "wire", "sent money",
                                                                    "payment app", "transfer was reversed"]),
-    "Prepaid card": (0.005, ["prepaid card", "card balance", "reload"]),
+    "Prepaid card": (0.002, ["prepaid card", "card balance", "reload"]),
 }  # fmt: skip
 FILLER = ["I contacted them several times", "nobody would help me", "this has caused me stress",
           "I have documents to prove it", "please look into this", "they did not respond", "on XX/XX/XXXX",
@@ -65,8 +65,10 @@ def _narrative(rng: random.Random, product: str, month: str) -> str:
     return ". ".join(p[0].upper() + p[1:] for p in parts) + "."
 
 
-def make_archive(dest: Path, per_month: int = 420, seed: int = 7) -> Path:
-    """Write the fake archive zips and an archive page that links them. Returns the page path."""
+def make_archive(dest: Path, per_month: int = 420, seed: int = 7, last_month_rows: int = 2) -> Path:
+    """Write the fake archive zips and an archive page that links them. Returns the page path.
+
+    Like the real archive, the final month is nearly empty (the CFPB stopped publishing in mid-August 2026)."""
     import pandas as pd
 
     rng = random.Random(seed)
@@ -79,7 +81,8 @@ def make_archive(dest: Path, per_month: int = 420, seed: int = 7) -> Path:
         w = csv.writer(buf)
         w.writerow(HEADER)
         for month in pd.period_range(start, end, freq="M"):
-            for _ in range(per_month):
+            n = last_month_rows if str(month) == ARCHIVES[-1][2] else per_month
+            for _ in range(n):
                 product = rng.choices(names, weights)[0]
                 day = rng.randint(1, 28)
                 next_id += 1

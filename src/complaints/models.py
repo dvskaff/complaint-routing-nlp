@@ -17,6 +17,7 @@ import math
 import os
 import random
 import time
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -99,7 +100,7 @@ class HashEmbedder:
         out = np.zeros((len(texts), self.dim), dtype=np.float32)
         for i, t in enumerate(texts):
             for w in t.lower().split():
-                out[i, hash(w.strip(".,")) % self.dim] += 1.0
+                out[i, zlib.crc32(w.strip(".,").encode()) % self.dim] += 1.0  # stable across runs
         return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-9)
 
 
@@ -316,13 +317,13 @@ class Calibration:
         return {"temperature": float(self.temperature), "bias": [float(b) for b in self.bias]}
 
 
-def fit_calibration(
-    val_logits: np.ndarray, y_val: np.ndarray, y_train: np.ndarray, n_labels: int
-) -> Calibration:
-    """Prior correction (training is balanced, the real mix is not) + temperature by validation log-loss."""
+def fit_calibration(val_logits: np.ndarray, y_val: np.ndarray, y_train: np.ndarray, n_labels: int,
+                    prior: bool = True) -> Calibration:  # fmt: skip
+    """Prior correction (training is balanced, the real mix is not) + temperature by validation log-loss.
+    prior=False fits the temperature only (for inputs that are already prior-corrected)."""
     prior_train = (np.bincount(y_train, minlength=n_labels) + 1.0) / (len(y_train) + n_labels)
     prior_val = (np.bincount(y_val, minlength=n_labels) + 1.0) / (len(y_val) + n_labels)
-    bias = np.log(prior_val) - np.log(prior_train)
+    bias = np.log(prior_val) - np.log(prior_train) if prior else np.zeros(n_labels)
 
     def nll(log_t: float) -> float:
         lp = log_softmax(val_logits / math.exp(log_t) + bias, axis=1)

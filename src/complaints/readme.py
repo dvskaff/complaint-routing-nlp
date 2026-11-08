@@ -14,7 +14,7 @@ def _p(v) -> str:
 
 
 def update(cfg, run: dict, scores: dict, topics: dict, dups: dict) -> None:
-    from .pipeline import FT_NAME
+    from .pipeline import ENS_NAME, FT_NAME
 
     ft, tf, emb = (
         scores[FT_NAME],
@@ -34,7 +34,8 @@ def update(cfg, run: dict, scores: dict, topics: dict, dups: dict) -> None:
         "|---|---|---|---|---|",
     ]
     for name, s in [("Majority class", maj), ("TF-IDF + logistic regression", tf),
-                    ("Sentence embeddings + logistic regression", emb), (FT_NAME, ft)]:  # fmt: skip
+                    ("Sentence embeddings + logistic regression", emb), (FT_NAME, ft),
+                    (ENS_NAME, scores[ENS_NAME])]:  # fmt: skip
         bold = "**" if name == FT_NAME else ""
         lines.append(f"| {bold}{name}{bold} | {_p(s['accuracy'])} | {s['macro_f1']:.3f} | "
                      f"{_p(s['routing']['auto_share'])} | {_p(s['routing']['auto_accuracy'])} |")  # fmt: skip

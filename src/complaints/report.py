@@ -107,19 +107,21 @@ def chart_topics(summary: dict) -> str:
     fig = go.Figure()
     months = summary["months"]
     for i, t in enumerate(summary["emerging"][:4]):
-        fig.add_trace(go.Scatter(x=months, y=t["monthly_share"], name=t["label"], mode="lines+markers",
+        prod = html.escape(short(t["top_product"]))
+        fig.add_trace(go.Scatter(x=months, y=t["monthly_share"], name=f"{t['label']} ({prod})", mode="lines+markers",
                                  line=dict(color=SERIES[i % len(SERIES)], width=2), marker=dict(size=8),
-                                 hovertemplate="%{x}: %{y:.1%} of complaints<extra>" + html.escape(t["label"]) +
-                                               "</extra>"))  # fmt: skip
+                                 connectgaps=False,
+                                 hovertemplate="%{x}: %{y:.1%} of " + prod + " complaints<extra>" +
+                                               html.escape(t["label"]) + "</extra>"))  # fmt: skip
     if summary["recent_months"]:
         fig.add_vrect(x0=summary["recent_months"][0], x1=summary["recent_months"][-1], fillcolor="#eef3fa",
                       opacity=0.6, line_width=0, layer="below", annotation_text="recent",
                       annotation_position="top left")  # fmt: skip
     _style(
         fig,
-        "Share of complaints in each emerging topic, by month",
+        "Emerging topics: share of their product's complaints, by month",
         430,
-        "share of complaints",
+        "share of the product's complaints",
         legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
         margin=dict(l=64, r=20, t=50, b=110),
     )
@@ -142,6 +144,39 @@ def chart_volume(by_month: dict, w: dict) -> str:
     _style(fig, "Published complaint narratives per month in the archive (window used here)", 340,
            "narratives", hovermode="closest", bargap=0.25)  # fmt: skip
     return _div(fig)
+
+
+def chart_mix(mix: dict) -> str:
+    fig = go.Figure()
+    months = mix["months"]
+    for i, (p, shares) in enumerate(mix["shares"].items()):
+        fig.add_trace(go.Scatter(x=months, y=shares, name=short(p), mode="lines+markers",
+                                 line=dict(color=SERIES[i % len(SERIES)], width=2), marker=dict(size=7),
+                                 hovertemplate="%{x}: %{y:.0%} of narratives<extra>" + html.escape(short(p)) +
+                                               "</extra>"))  # fmt: skip
+    _style(fig, "Product mix of the archive by month (largest products, natural sample)", 380,
+           "share of narratives", hovermode="x unified")  # fmt: skip
+    fig.update_yaxes(tickformat=".0%", rangemode="tozero")
+    return _div(fig)
+
+
+def mix_sentence(mix: dict) -> str:
+    """Name the biggest shift in the product mix between the start and the end of the window, if there is one."""
+    if not mix:
+        return ""
+    best = None
+    for p, shares in mix["shares"].items():
+        a, b = float(np.mean(shares[:3])), float(np.mean(shares[-3:]))
+        if best is None or abs(b - a) > abs(best[2] - best[1]):
+            best = (p, a, b)
+    p, a, b = best
+    if abs(b - a) < 0.15:
+        return ""
+    return (
+        f"The mix of published narratives shifts sharply over the window: {short(p).lower()} goes from {a:.0%} of "
+        f"narratives in the first three months to {b:.0%} in the last three. Training is balanced by product, and "
+        f"calibration uses the validation month's mix, so the model is tuned to the recent mix."
+    )
 
 
 # --------------------------------------------------------------------------- demo
@@ -230,7 +265,7 @@ td.l b, td.l { min-width:150px; }
 # --------------------------------------------------------------------------- page
 def build_site(cfg, run: dict, scores: dict, curves: dict, per_class: pd.DataFrame, cm: pd.DataFrame,
                errors: list[dict], dups: dict, topics: dict, examples: list[str]) -> None:  # fmt: skip
-    from .pipeline import FT_NAME
+    from .pipeline import ENS_NAME, FT_NAME
 
     site = cfg.site_dir
     site.mkdir(parents=True, exist_ok=True)
@@ -243,8 +278,8 @@ def build_site(cfg, run: dict, scores: dict, curves: dict, per_class: pd.DataFra
     cards = "".join([
         _card("Auto-routed", _pct(r["auto_share"]), f"of test complaints, {_p1(r['auto_accuracy'])} of them routed "
               f"correctly (target {cfg.target_accuracy:.0%}); the rest go to a person"),
-        _card("Macro-F1", f"{ft['macro_f1']:.2f}", f"fine-tuned transformer vs. {tf['macro_f1']:.2f} for TF-IDF, "
-              f"across {len(run['labels'])} products"),
+        _card("Macro-F1", f"{ft['macro_f1']:.2f}", f"fine-tuned transformer vs. {tf['macro_f1']:.2f} for TF-IDF and "
+              f"{scores[ENS_NAME]['macro_f1']:.2f} for both combined, across {len(run['labels'])} products"),
         _card("Accuracy", _p1(ft["accuracy"]), f"all test complaints · always-majority: {_p1(maj['accuracy'])}"),
         _card("Top-2 accuracy", _p1(ft["top2_accuracy"]), "right team among the two suggestions"),
         _card("Browser model", f"{run['onnx']['size_mb']:.0f} MB" if run["onnx"]["size_mb"] >= 10
@@ -258,6 +293,7 @@ def build_site(cfg, run: dict, scores: dict, curves: dict, per_class: pd.DataFra
         "TF-IDF + logistic regression",
         "Sentence embeddings + logistic regression",
         FT_NAME,
+        ENS_NAME,
     ]
     comp_rows = []
     for n in order:
@@ -289,6 +325,10 @@ def build_site(cfg, run: dict, scores: dict, curves: dict, per_class: pd.DataFra
     unseen = dups.get("unseen", {})
     mix_rows = [[short(p), _int(run["train_by_product"].get(p, 0)), _int(n), _pct(n / max(run["test"], 1))]
                 for p, n in sorted(run["test_by_product"].items(), key=lambda kv: -kv[1])]  # fmt: skip
+    sparse = run.get("sparse_months") or {}
+    sparse_txt = (f"The newest archive months hold almost nothing ({', '.join(f'{m}: {n:,}' for m, n in sparse.items())} "
+                  f"narratives), so the window ends in {w['test'][-1]}." if sparse else "")  # fmt: skip
+    mix_txt = mix_sentence(run.get("mix_by_month") or {})
     not_routed = ", ".join(f"{short(k)} ({v:,})" for k, v in run["not_routed"].items()) or "none"
     demo = DEMO_HTML.replace("%MODEL_MB%", f"{run['onnx']['size_mb']:.0f}")
     js = DEMO_JS.replace("%SHORT%", json.dumps(SHORT)).replace(
@@ -313,15 +353,16 @@ and passing the uncertain ones to a person? And which issues are growing? Built 
 <main>
 <div class="cards">{cards}</div>
 {demo}
-<section><h2>Four models, from simple to transformer</h2>
-<p>All four learn from the same {run["train"]:,} training complaints (class-balanced: at most
+<section><h2>Models, from simple to transformer</h2>
+<p>All models learn from the same {run["train"]:,} training complaints (class-balanced: at most
 {cfg.train_cap_per_product:,} per product) and are scored on {
         run["test"]:,} complaints from the two newest months, in
 their real product mix. Probabilities are calibrated on the validation month ({
         w["val"]
     }): a prior correction for the
 real mix plus temperature scaling. Macro-F1 weighs every product equally, so it rewards getting the small products
-right, not only credit reporting.</p>
+right, not only the largest. The ensemble averages the calibrated probabilities of the fine-tuned model and TF-IDF; the
+browser demo runs the fine-tuned model alone.</p>
 {comp}
 <p class="muted">Calibration error is the expected calibration error before → after calibration (0 = stated confidence
 matches accuracy). Fine-tuning: {run["base_model"]}, {run["finetune"]["train_size"]:,} complaints, {
@@ -370,14 +411,15 @@ every month) into {topics["topics"]} topics by meaning, using the same sentence 
 did not fit any topic. A topic is <b>emerging</b> when its share of complaints in the last {
         len(topics["recent_months"])
     }
-months is well above its share before.</p>
+months is well above its share before. Shares are measured within each topic's main product (for example, the share
+of checking-account complaints about a scam), so the archive's changing product mix doesn't create false trends.</p>
 {chart_topics(topics) if topics["emerging"] else ""}
 {
         _table(
             [
                 "Topic (top words)",
-                "Share before",
-                "Share recently",
+                "Share of its product before",
+                "Recently",
                 "Change",
                 "Ratio",
                 "Main product",
@@ -391,7 +433,9 @@ months is well above its share before.</p>
     }
 <h3>Fading</h3>{
         _table(
-            ["Topic (top words)", "Share before", "Share recently", "Change", "Main product"], fading_rows, 1
+            ["Topic (top words)", "Share of its product before", "Recently", "Change", "Main product"],
+            fading_rows,
+            1,
         )
         if fading_rows
         else "<p class='muted'>None.</p>"
@@ -405,8 +449,10 @@ months is well above its share before.</p>
 <p>In August 2026 the CFPB stopped publishing complaint narratives and moved every narrative it had published into a
 downloadable archive. This window holds {
         sum(run["narratives_by_month"].values()):,} of them. The pipeline reads the
-archive files directly ({", ".join(run["files"][-3:])} and earlier) and keeps a fixed, hash-based sample.</p>
+archive files directly ({", ".join(run["files"][-3:])} and earlier) and keeps a fixed, hash-based sample.
+{sparse_txt} {mix_txt}</p>
 {chart_volume(run["narratives_by_month"], w)}
+{chart_mix(run["mix_by_month"]) if run.get("mix_by_month") else ""}
 <div class="grid2"><div>{_table(["Product", "Training", "Test", "Test share"], mix_rows, 1)}</div>
 <div><p class="small">Training is capped per product so small products are learned too; testing keeps the real mix.
 Products with fewer than {cfg.min_train_per_product} training complaints are not routed and go to human review

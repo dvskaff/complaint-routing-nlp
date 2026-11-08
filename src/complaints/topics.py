@@ -71,36 +71,47 @@ def keywords(docs: pd.DataFrame, topics: np.ndarray, n: int = 6) -> dict[int, li
 
 
 def summarize(cfg, docs: pd.DataFrame, emb: np.ndarray, topics: np.ndarray, months: list[str]) -> dict:
-    """Monthly topic shares, emerging and fading topics, and the largest topics."""
+    """Monthly topic shares, emerging and fading topics, and the largest topics.
+
+    A topic's share is measured within its main product (e.g. the share of checking-account complaints about an
+    impersonation scam), so a change in the overall product mix doesn't make whole groups of topics look like they
+    are growing or fading. Months with too few complaints of that product are left out.
+    """
     d = docs.assign(topic=topics)
     recent = months[-cfg.recent_months :]
     base = months[: -cfg.recent_months]
-    per_month = d.groupby("month").size().reindex(months, fill_value=0)
-    counts = d[d["topic"] >= 0].groupby(["topic", "month"]).size().unstack(fill_value=0).reindex(columns=months,
-                                                                                                fill_value=0)  # fmt: skip
-    share = counts.div(per_month.replace(0, np.nan), axis=1).fillna(0.0)
+    by_product = (
+        d.groupby(["product", "month"]).size().unstack(fill_value=0).reindex(columns=months, fill_value=0)
+    )
+    min_docs = 3 if cfg.fixture else 20
     words = keywords(d, topics)
     rows = []
-    for t in counts.index:
+    for t in sorted(set(topics.tolist()) - {-1}):
         mask = d["topic"].to_numpy() == t
         sub = d[mask]
-        centroid = emb[mask].mean(0)
-        sims = emb[mask] @ centroid
-        example = sub["text"].iloc[int(np.argmax(sims))]
         prod = sub["product"].value_counts(normalize=True)
+        main = prod.index[0]
+        in_main = sub[sub["product"] == main].groupby("month").size().reindex(months, fill_value=0)
+        denom = by_product.loc[main].astype(float)
+        share = (in_main / denom.where(denom >= min_docs)).astype(float)
+        rs = float(np.nanmean(share[recent])) if share[recent].notna().any() else np.nan
+        bs = float(np.nanmean(share[base])) if base and share[base].notna().any() else np.nan
+        if np.isnan(rs) or np.isnan(bs):
+            continue
+        centroid = emb[mask].mean(0)
+        example = sub["text"].iloc[int(np.argmax(emb[mask] @ centroid))]
         comp = sub["company"].replace("", np.nan).dropna().value_counts(normalize=True)
-        rs, bs = float(share.loc[t, recent].mean()), float(share.loc[t, base].mean()) if base else 0.0
         rows.append({
             "topic": int(t), "label": " · ".join(words.get(t, [])[:4]), "words": words.get(t, []),
-            "docs": int(mask.sum()), "recent_docs": int(counts.loc[t, recent].sum()),
+            "docs": int(mask.sum()), "recent_docs": int(in_main[recent].sum()),
             "recent_share": rs, "base_share": bs, "change_pts": rs - bs, "ratio": (rs + 1e-4) / (bs + 1e-4),
-            "top_product": prod.index[0], "top_product_share": float(prod.iloc[0]),
+            "top_product": main, "top_product_share": float(prod.iloc[0]),
             "top_company": comp.index[0] if len(comp) else "", "top_company_share": float(comp.iloc[0]) if len(comp) else 0.0,
-            "monthly_share": [float(x) for x in share.loc[t, months]],
+            "monthly_share": [None if np.isnan(x) else float(x) for x in share],
             "example": example[:240] + ("…" if len(example) > 240 else ""),
         })  # fmt: skip
     table = pd.DataFrame(rows)
-    out = {"months": months, "recent_months": recent, "docs": int(len(d)), "topics": int(len(table)),
+    out = {"months": months, "recent_months": recent, "docs": int(len(d)), "topics": int(len(set(topics.tolist()) - {-1})),
            "outlier_share": float((topics == -1).mean()), "emerging": [], "fading": [], "largest": []}  # fmt: skip
     if table.empty:
         return out

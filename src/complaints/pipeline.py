@@ -31,6 +31,9 @@ from .config import Config
 
 log = logging.getLogger("complaints")
 FT_NAME = "Fine-tuned MiniLM transformer"
+TF_NAME = "TF-IDF + logistic regression"
+ENS_NAME = "Ensemble: fine-tuned + TF-IDF"
+SAMPLE_VERSION = 2  # bump when sampling or text cleaning changes, so cached samples are rebuilt
 
 
 def _key(*parts) -> str:
@@ -42,17 +45,17 @@ class QualityGateError(RuntimeError):
 
 
 # --------------------------------------------------------------------------- cached steps
-def samples_step(cfg: Config, archives, w) -> tuple[pd.DataFrame, dict]:
-    manifest = {"files": [a.name for a in data.needed(archives, w)], "window": asdict(w),
-                "sampling": [cfg.train_cap_per_product, cfg.val_size, cfg.test_size_per_month,
-                             cfg.topic_size_per_month, cfg.max_chars, cfg.seed]}  # fmt: skip
+def samples_step(cfg: Config, archives) -> tuple[pd.DataFrame, dict]:
+    manifest = {"version": SAMPLE_VERSION, "files": [a.name for a in data.candidate_files(archives, cfg)],
+                "sampling": [cfg.train_months, cfg.test_months, cfg.topic_months, cfg.train_cap_per_product,
+                             cfg.val_size, cfg.test_size_per_month, cfg.topic_size_per_month, cfg.max_chars, cfg.seed]}  # fmt: skip
     path, meta = cfg.cache_dir / "samples.parquet", cfg.cache_dir / "samples.json"
     if path.exists() and meta.exists():
         saved = json.loads(meta.read_text())
         if saved.get("manifest") == manifest:
             log.info("Samples: reusing cache (%s)", ", ".join(saved["manifest"]["files"][-2:]))
             return pd.read_parquet(path), saved["stats"]
-    df, stats = data.build_samples(cfg, archives, w)
+    df, stats = data.build_samples(cfg, archives)
     cfg.cache_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(path, index=False)
     meta.write_text(json.dumps({"manifest": manifest, "stats": stats}, indent=2))
@@ -118,6 +121,14 @@ def topics_step(cfg: Config, docs: pd.DataFrame, emb: np.ndarray, emb_key: str) 
     return tp
 
 
+def mix_by_month(df: pd.DataFrame, w, top: int = 5) -> dict:
+    """Share of each of the largest products among the natural monthly sample."""
+    nat = df[df["in_topics"]]
+    tab = pd.crosstab(nat["month"], nat["product"], normalize="index").reindex(w.topics).fillna(0.0)
+    keep = tab.mean().sort_values(ascending=False).index[:top]
+    return {"months": list(tab.index), "shares": {p: [float(x) for x in tab[p]] for p in keep}}
+
+
 # --------------------------------------------------------------------------- quality gate
 def gate(cfg: Config, scores: dict, majority_acc: float, onnx_check: dict) -> list[str]:
     ft = scores[FT_NAME]
@@ -165,11 +176,8 @@ def run(cfg: Config) -> dict:
 
         make_archive(cfg.data_dir / "fixture")
     archives = data.list_archives(cfg)
-    w = data.plan_window(archives, cfg)
-    log.info(
-        "Window: train %s to %s, validation %s, test %s", w.train[0], w.train[-1], w.val, ", ".join(w.test)
-    )
-    df, sample_stats = samples_step(cfg, archives, w)
+    df, sample_stats = samples_step(cfg, archives)
+    w = data.Window(**sample_stats["window"])
     fp = data.fingerprint(df)
     labels = data.label_set(df, cfg)
     lid = {k: i for i, k in enumerate(labels)}
@@ -196,12 +204,21 @@ def run(cfg: Config) -> dict:
     outputs.append(ft)
 
     # ---- calibration, metrics and the routing policy, all fitted on validation and reported on test
-    scores, curves, cals, probs = {}, {}, {}, {}
+    cals = {}
     for o in outputs:
-        if o.name == "Majority class":
-            cal = models.Calibration(1.0, np.zeros(len(labels)))
-        else:
-            cal = models.fit_calibration(o.val, y_val, y, len(labels))
+        cals[o.name] = (models.Calibration(1.0, np.zeros(len(labels))) if o.name == "Majority class"
+                        else models.fit_calibration(o.val, y_val, y, len(labels)))  # fmt: skip
+    # Ensemble: average of the calibrated log-probabilities of the fine-tuned model and TF-IDF (re-tempered only)
+    tf_o = next(o for o in outputs if o.name == TF_NAME)
+    ens = models.Output(ENS_NAME, 0.5 * cals[TF_NAME].apply(tf_o.val) + 0.5 * cals[FT_NAME].apply(ft.val),
+                        0.5 * cals[TF_NAME].apply(tf_o.test) + 0.5 * cals[FT_NAME].apply(ft.test),
+                        tf_o.seconds_train + ft.seconds_train, tf_o.ms_per_complaint + ft.ms_per_complaint,
+                        tf_o.size_mb + ft.size_mb)  # fmt: skip
+    outputs.append(ens)
+    cals[ENS_NAME] = models.fit_calibration(ens.val, y_val, y, len(labels), prior=False)
+    scores, curves, probs = {}, {}, {}
+    for o in outputs:
+        cal = cals[o.name]
         pv, pt = np.exp(cal.apply(o.val)), np.exp(cal.apply(o.test))
         raw_t = np.exp(log_softmax(o.test, axis=1))
         thr = evaluate.choose_threshold(pv, y_val, cfg.target_accuracy)
@@ -210,7 +227,7 @@ def run(cfg: Config) -> dict:
                           "ms_per_complaint": o.ms_per_complaint, "size_mb": o.size_mb,
                           "temperature": cal.temperature, **o.info}  # fmt: skip
         curves[o.name] = evaluate.coverage_curve(pt, y_test)
-        cals[o.name], probs[o.name] = cal, pt
+        probs[o.name] = pt
         r = scores[o.name]["routing"]
         log.info("  %-44s accuracy %.3f  macro-F1 %.3f  auto-routes %.0f%% at %.1f%% accuracy", o.name,
                  scores[o.name]["accuracy"], scores[o.name]["macro_f1"], r["auto_share"] * 100,
@@ -260,7 +277,8 @@ def run(cfg: Config) -> dict:
         "train_by_product": {labels[i]: int(n) for i, n in enumerate(np.bincount(y, minlength=len(labels)))},
         "backend": cfg.backend, "base_model": cfg.base_model, "embedder": cfg.embedder, "fingerprint": fp,
         "finetune": {k: ft_info[k] for k in ("history", "best_epoch", "seconds", "train_size")},
-        "onnx": onnx_check, "runtime_bundled": runtime, "model_id": model_id, "target_accuracy": cfg.target_accuracy,
+        "onnx": onnx_check, "runtime_bundled": runtime, "model_id": model_id,
+        "sparse_months": sample_stats.get("sparse_months", {}), "mix_by_month": mix_by_month(df, w), "target_accuracy": cfg.target_accuracy,
         "built_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"), "seconds": round(time.time() - t_start),
     }  # fmt: skip
     from . import readme, report

@@ -12,9 +12,9 @@ right product team, handling the easy cases on its own and passing the uncertain
 are growing? This project answers both on real consumer complaint narratives published by the U.S. Consumer Financial
 Protection Bureau (CFPB).
 
-* **Routing:** four models on the same time-based split, from a majority-class floor to TF-IDF + logistic
+* **Routing:** models on the same time-based split, from a majority-class floor to TF-IDF + logistic
   regression, frozen sentence embeddings (MiniLM via `sentence-transformers`) + logistic regression, and the same
-  MiniLM encoder **fine-tuned end to end** in PyTorch. Scored on the two newest months in their real product mix
+  MiniLM encoder **fine-tuned end to end** in PyTorch, plus an ensemble of the fine-tuned model and TF-IDF. Scored on the two newest months in their real product mix
   (macro-F1, accuracy, top-2, calibration error).
 * **Auto-route vs. human review:** probabilities are calibrated (prior correction + temperature scaling) on a
   validation month; complaints above a confidence threshold that was 95% accurate on validation are routed
@@ -41,8 +41,11 @@ _Results appear here after the first run of the **Pipeline** workflow._
 The CFPB's Consumer Complaint Database published consumers' own descriptions of their problems (with personal details
 redacted) until **August 2026**, when the bureau stopped publishing narratives and moved every narrative it had
 published, December 2011 to August 14, 2026, into a downloadable archive in its FOIA reading room. This project reads
-those archive files directly. The pipeline checks the archive page monthly; if new files ever appear, the window moves
-forward and everything retrains on its own.
+those archive files directly. Two things in the archive shape the design, and the pipeline handles both from the data:
+the final month is nearly empty (August 2026 holds a single narrative), so the window ends at the last month with a
+normal volume; and the product mix shifts sharply in early 2026, so the model is calibrated to the recent mix and
+topic trends are measured within each product. The pipeline checks the archive page monthly; if new files ever appear,
+the window moves forward and everything retrains on its own.
 
 Labels are the product the consumer chose when filing (the CFPB's product categories). Training uses the nine months
 before the validation month, class-balanced (at most 1,500 complaints per product); validation and test use natural

@@ -3,7 +3,11 @@
 # serves them itself instead of depending on a third-party CDN.
 set -euo pipefail
 VERSION="4.3.1"
-DEST="$(cd "$(dirname "$0")/.." && pwd)/${1:-web/vendor}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+case "${1:-web/vendor}" in
+  /*) DEST="$1" ;;
+  *) DEST="$ROOT/${1:-web/vendor}" ;;
+esac
 mkdir -p "$DEST"
 TMP="$(mktemp -d)"
 cd "$TMP"

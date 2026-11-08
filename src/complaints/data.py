@@ -21,7 +21,7 @@ import logging
 import re
 import shutil
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -61,16 +61,20 @@ SPLITS = ("in_train", "in_val", "in_test", "in_topics")
 
 
 # --------------------------------------------------------------------------- text
-_MASK = re.compile(r"\b(?:X{2,}[/-]?)+(?:\d+)?\b|\{\$([\d,.]+)\}")
+_MASK = re.compile(r"\b(?:X{2,}[/-]?)+\d*(?![A-WYZ])|\{\$([\d,.]+)\}")  # not "XXL"
+_TAGS = re.compile(
+    r"<?\b(?:year|scrub|redacted|date|name)\w*>|<\w+>", re.I
+)  # newer redaction marks: "on year>."
 
 
 def clean_text(text: str, max_chars: int = 3000) -> str:
-    """Drop the CFPB's redaction marks (XXXX, XX/XX/XXXX), unwrap amounts ({$45.00} -> $45.00), squash spaces."""
+    """Drop the CFPB's redaction marks (XXXX, XX/XX/XXXX, year>, scrub>), unwrap amounts ({$45.00} -> $45.00),
+    squash spaces."""
 
     def sub(m: re.Match) -> str:
         return f"${m.group(1)}" if m.group(1) else " "
 
-    t = _MASK.sub(sub, str(text))
+    t = _TAGS.sub(" ", _MASK.sub(sub, str(text)))
     t = re.sub(r"\s+", " ", t).strip()
     t = re.sub(r"\s+([.,;:!?])", r"\1", t)
     return t[:max_chars]
@@ -155,15 +159,38 @@ class Window:
         return self.test[-1]
 
 
-def plan_window(archives: list[Archive], cfg: Config) -> Window:
+def window_ending(last: str, cfg: Config) -> Window:
     """Newest months for testing, the month before for validation, the months before that for training."""
-    last = max(a.end for a in archives)
     p = pd.Period(last, freq="M")
     test = [str(p - i) for i in range(cfg.test_months - 1, -1, -1)]
     val = str(p - cfg.test_months)
     train = [str(p - cfg.test_months - i) for i in range(cfg.train_months, 0, -1)]
     topics = [str(p - i) for i in range(cfg.topic_months - 1, -1, -1)]
     return Window(train, val, test, topics)
+
+
+def plan_window(archives: list[Archive], cfg: Config) -> Window:
+    """Provisional window, ending with the newest month any archive file covers."""
+    return window_ending(max(a.end for a in archives), cfg)
+
+
+def effective_last(counts: dict[str, int], last: str, lookback: int = 6, share: float = 0.2) -> str:
+    """The newest month with a normal volume of narratives. The final archive month can be nearly empty (August 2026
+    holds a single narrative), and a month like that can't be a test month or a point on a trend line."""
+    p = pd.Period(last, freq="M")
+    for _ in range(lookback):
+        before = [counts.get(str(p - i), 0) for i in range(1, lookback + 1)]
+        before = [c for c in before if c > 0]
+        if not before or counts.get(str(p), 0) >= share * float(np.median(before)):
+            return str(p)
+        p -= 1
+    return str(p)
+
+
+def candidate_files(archives: list[Archive], cfg: Config, spare_months: int = 3) -> list[Archive]:
+    """Files covering the provisional window plus a few spare months, in case the newest months are nearly empty."""
+    first = str(pd.Period(plan_window(archives, cfg).first, freq="M") - spare_months)
+    return [a for a in archives if a.end >= first]
 
 
 def needed(archives: list[Archive], w: Window) -> list[Archive]:
@@ -325,20 +352,37 @@ class Sampler:
         return df.sort_values(["month", "complaint_id"]).reset_index(drop=True)
 
 
-def build_samples(cfg: Config, archives: list[Archive], w: Window) -> tuple[pd.DataFrame, dict]:
-    """Download the archive files the window needs, one at a time (each is deleted once read), and sample."""
-    sampler = Sampler(cfg, w)
+def build_samples(cfg: Config, archives: list[Archive]) -> tuple[pd.DataFrame, dict]:
+    """Download the candidate archive files, count narratives per month to place the window, then sample."""
     raw = cfg.data_dir / "raw"
-    files = needed(archives, w)
-    for a in files:
-        path = download(cfg, a, raw)
+    files = candidate_files(archives, cfg)
+    paths = [download(cfg, a, raw) for a in files]
+    counts: dict[str, int] = {}
+    for path in paths:  # pass 1: monthly volumes
+        for chunk in read_archive(path):
+            for m, n in chunk["month"].value_counts().items():
+                counts[m] = counts.get(m, 0) + int(n)
+    provisional = max(a.end for a in archives)
+    last = effective_last(counts, provisional)
+    w = window_ending(last, cfg)
+    sparse = [m for m in month_range(last, provisional)[1:]]
+    if sparse:
+        log.info("Ending the window at %s: %s hold only %s narratives", last, ", ".join(sparse),
+                 ", ".join(f"{counts.get(m, 0):,}" for m in sparse))  # fmt: skip
+    log.info(
+        "Window: train %s to %s, validation %s, test %s", w.train[0], w.train[-1], w.val, ", ".join(w.test)
+    )
+    sampler = Sampler(cfg, w)
+    for path in paths:  # pass 2: sampling
         for chunk in read_archive(path):
             sampler.add(chunk)
-        path.unlink()
         log.info("  %s rows read so far", f"{sampler.rows_seen:,}")
+    for path in paths:
+        path.unlink()
     df = sampler.result()
-    stats = {"files": [a.name for a in files], "rows_read": sampler.rows_seen,
-             "narratives_by_month": {m: sampler.by_month.get(m, 0) for m in month_range(w.first, w.last)}}  # fmt: skip
+    stats = {"files": [a.name for a in files], "rows_read": sampler.rows_seen, "window": asdict(w),
+             "sparse_months": {m: counts.get(m, 0) for m in sparse},
+             "narratives_by_month": {m: counts.get(m, 0) for m in month_range(w.first, w.last)}}  # fmt: skip
     return df, stats
 
 
