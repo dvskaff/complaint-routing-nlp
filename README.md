@@ -5,7 +5,9 @@
 ![Python](https://img.shields.io/badge/python-3.13-blue) ![PyTorch](https://img.shields.io/badge/PyTorch-2.15-ee4c2c)
 ![Transformers](https://img.shields.io/badge/Hugging%20Face-Transformers-yellow) ![ONNX](https://img.shields.io/badge/ONNX-int8-lightgrey)
 
-**Live dashboard and in-browser demo: https://dvskaff.github.io/complaint-routing-nlp/** · [Model card](MODEL_CARD.md)
+* **Dashboard:** [routing, calibration and emerging-issue results](https://dvskaff.github.io/complaint-routing-nlp/)
+* **Demo:** [route a complaint with the model running in your browser](https://dvskaff.github.io/complaint-routing-nlp/#demo)
+* **Model card:** [intended use, data, metrics and limits](MODEL_CARD.md)
 
 A financial company receives thousands of free-text complaints a day. Can a model read each one and send it to the
 right product team, handling the easy cases on its own and passing the uncertain ones to a person? And which issues
@@ -69,6 +71,26 @@ samples of the newest months, so scores reflect the real mix, which is dominated
 
 ## How it works
 
+```mermaid
+flowchart LR
+    CFPB["CFPB complaint<br/>narrative archive"] -->|"hash-based samples<br/>time-based split"| SPLIT["Train · validation month<br/>· two test months"]
+    SPLIT --> BASE["Baselines<br/>majority, TF-IDF + LR,<br/>MiniLM embeddings + LR"]
+    SPLIT --> FT["MiniLM fine-tuned<br/>end to end (PyTorch)"]
+    BASE --> ENS["Ensemble<br/>fine-tuned + TF-IDF"]
+    FT --> ENS
+    ENS --> CAL["Calibration<br/>prior correction + temperature"]
+    CAL --> ROUTE["Auto-route or<br/>human review (top 2)"]
+    SPLIT --> TOPICS["BERTopic<br/>emerging issues"]
+    FT --> ONNX["ONNX int8<br/>parity check"]
+    ROUTE --> GATE{{"Quality gate"}}
+    ONNX --> GATE
+    TOPICS --> GATE
+    GATE --> SITE["Dashboard + model card<br/>+ README results"]
+    GATE --> DEMO["In-browser demo<br/>transformers.js"]
+```
+
+<details><summary>Every step in detail</summary>
+
 ```
 CFPB narrative archive (zip files) ── src/complaints/data.py: stream CSV chunks, map columns, hash-based samples
    │                                   balanced training set · natural validation / test / topic samples
@@ -82,6 +104,8 @@ src/complaints/export.py     ONNX (calibration inside) → int8 → parity check
    ▼
 quality gate ── dashboard + in-browser demo (GitHub Pages) · README results · MODEL_CARD.md
 ```
+
+</details>
 
 Heavy steps (sample, embeddings, fine-tuned model, topics) are cached in a release asset between runs and recomputed
 only when their inputs change.
