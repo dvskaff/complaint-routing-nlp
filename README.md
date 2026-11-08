@@ -35,7 +35,7 @@ Protection Bureau (CFPB).
 Rewritten automatically after every pipeline run.
 
 <!-- RESULTS:START -->
-_CFPB narrative archive · trained on 2025-08 to 2026-04 (16,500 complaints), tested on 2026-06 to 2026-07 (16,000 complaints, real product mix) · 11 products · last run 2026-11-08 22:32 UTC_
+_CFPB narrative archive · trained on 2025-08 to 2026-04 (16,500 complaints), tested on 2026-06 to 2026-07 (16,000 complaints, real product mix) · 11 products · last run 2026-11-08 22:38 UTC_
 
 | Model (test months) | Accuracy | Macro-F1 | Auto-routed at 95% target | Accuracy when auto-routed |
 |---|---|---|---|---|
