@@ -33,23 +33,23 @@ Protection Bureau (CFPB).
 Rewritten automatically after every pipeline run.
 
 <!-- RESULTS:START -->
-_CFPB narrative archive · trained on 2025-08 to 2026-04 (16,500 complaints), tested on 2026-06 to 2026-07 (16,000 complaints, real product mix) · 11 products · last run 2026-11-08 03:32 UTC_
+_CFPB narrative archive · trained on 2025-08 to 2026-04 (16,500 complaints), tested on 2026-06 to 2026-07 (16,000 complaints, real product mix) · 11 products · last run 2026-11-08 05:50 UTC_
 
 | Model (test months) | Accuracy | Macro-F1 | Auto-routed at 95% target | Accuracy when auto-routed |
 |---|---|---|---|---|
-| Majority class | 29.0% | 0.041 | 100.0% | 29.0% |
-| TF-IDF + logistic regression | 81.3% | 0.740 | 58.0% | 94.4% |
-| Sentence embeddings + logistic regression | 78.6% | 0.677 | 53.8% | 93.9% |
-| **Fine-tuned MiniLM transformer** | 81.6% | 0.703 | 58.1% | 94.4% |
-| Ensemble: fine-tuned + TF-IDF | 83.1% | 0.758 | 68.3% | 93.8% |
+| Majority class | 29.0% | 0.041 | 0.0% | – |
+| TF-IDF + logistic regression | 81.4% | 0.745 | 57.1% | 94.4% |
+| Sentence embeddings + logistic regression | 78.8% | 0.691 | 53.2% | 93.7% |
+| **Fine-tuned MiniLM transformer** | 81.2% | 0.742 | 58.0% | 94.7% |
+| Ensemble: fine-tuned + TF-IDF | 83.0% | 0.766 | 65.4% | 94.4% |
 
-**Routing policy:** auto-route when calibrated confidence ≥ 86.7% → 58.1% of complaints go straight to a team (94.4% correct); the rest go to a person, with the right team in the top two suggestions 86.8% of the time.
+**Routing policy:** auto-route when calibrated confidence ≥ 85.0% → 58.0% of complaints go straight to a team (94.7% correct); the rest go to a person, with the right team in the top two suggestions 84.2% of the time.
 
-**Browser model:** 23 MB 8-bit ONNX (calibration built in), 98.0% agreement with PyTorch · [try it](https://dvskaff.github.io/complaint-routing-nlp/#demo)
+**Browser model:** 23 MB 8-bit ONNX (calibration built in), same routing decision as the full model on 98.0% of complaints · [try it](https://dvskaff.github.io/complaint-routing-nlp/#demo)
 
 **Emerging issues (BERTopic, last 3 months vs. before):** reporting · fcra · inaccurate · reported (4.6% → 9.4%, Credit reporting); affirm · merchant · loan · refund (6.3% → 10.6%, Payday, title & personal loans); citibank · citi · card · dispute (7.5% → 10.3%, Credit card)
 
-_Template letters: 4.5% of test narratives also appear word for word in training; on the rest, macro-F1 is 0.699._
+_Template letters: 4.5% of test narratives also appear word for word in training; on the rest, macro-F1 is 0.738._
 <!-- RESULTS:END -->
 
 ## The data, and a change in August 2026
