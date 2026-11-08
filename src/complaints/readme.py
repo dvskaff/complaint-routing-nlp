@@ -46,7 +46,7 @@ def update(cfg, run: dict, scores: dict, topics: dict, dups: dict) -> None:
         f"team in the top two suggestions {_p(r['review_top2'])} of the time.",
         "",
         f"**Browser model:** {run['onnx']['size_mb']:.0f} MB 8-bit ONNX (calibration built in), "
-        f"{run['onnx']['top1_agreement']:.1%} agreement with PyTorch · "
+        f"same routing decision as the full model on {run['onnx']['decision_agreement']:.1%} of complaints · "
         f"[try it]({cfg.repo_url.replace('github.com/dvskaff', 'dvskaff.github.io')}/#demo)",
     ]
     if topics["emerging"]:
@@ -89,10 +89,11 @@ predictions straight to the product team and the rest to human review.
 - Training: {run["finetune"]["train_size"]:,} complaints from {w["train"][0]} to {w["train"][-1]}, at most
   {cfg.train_cap_per_product:,} per product; {cfg.epochs} epochs, AdamW, learning rate {cfg.learning_rate}, batch
   {cfg.batch_size}; best epoch by validation macro-F1 (epoch {run["finetune"]["best_epoch"]}).
-- Calibration: prior correction for the real product mix + temperature scaling (T = {ft["temperature"]:.2f}),
-  fitted on {w["val"]}.
+- Calibration: prior correction for the real product mix (strength {ft["prior_strength"]:.2f}, chosen on validation
+  so small products still get predicted) + temperature scaling (T = {ft["temperature"]:.2f}), fitted on {w["val"]}.
 - Deployment format: ONNX, 8-bit dynamic quantization, {run["onnx"]["size_mb"]:.0f} MB, calibration inside the graph;
-  {run["onnx"]["top1_agreement"]:.1%} top-1 agreement with PyTorch on {run["onnx"]["n"]} validation complaints.
+  on {run["onnx"]["n"]:,} validation complaints it makes the same routing decision as PyTorch {run["onnx"]["decision_agreement"]:.1%}
+  of the time and picks the same top team {run["onnx"]["top1_agreement"]:.1%} of the time.
 
 ## Results ({w["test"][0]} to {w["test"][-1]}, {run["test"]:,} complaints, real mix)
 - Accuracy {ft["accuracy"]:.1%} · macro-F1 {ft["macro_f1"]:.3f} · weighted F1 {ft["weighted_f1"]:.3f} · top-2

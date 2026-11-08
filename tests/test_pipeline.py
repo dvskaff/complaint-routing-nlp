@@ -49,7 +49,7 @@ def test_gate_catches_regression_and_parity(cfg):
     cfg.cache_dir.mkdir(parents=True)
     (cfg.cache_dir / "baseline.json").write_text(json.dumps({"macro_f1": 0.80}))
     scores = {pipeline.FT_NAME: {"macro_f1": 0.70, "accuracy": 0.9}}
-    problems = pipeline.gate(cfg, scores, 0.5, {"top1_agreement": 0.5})
+    problems = pipeline.gate(cfg, scores, 0.5, {"top1_agreement": 0.5, "decision_agreement": 0.5})
     assert any("fell from 0.800" in p for p in problems) and any("browser model" in p for p in problems)
 
 

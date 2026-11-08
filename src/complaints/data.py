@@ -105,9 +105,9 @@ def parse_name(name: str) -> tuple[str, str] | None:
     return start, end
 
 
-def session(cfg: Config) -> requests.Session:
+def session(cfg: Config, retries: int = 6) -> requests.Session:
     s = requests.Session()
-    retry = Retry(total=6, backoff_factor=3, status_forcelist=(429, 500, 502, 503, 504))
+    retry = Retry(total=retries, backoff_factor=3, status_forcelist=(429, 500, 502, 503, 504))
     s.mount("https://", HTTPAdapter(max_retries=retry))
     s.headers["User-Agent"] = cfg.user_agent
     return s
@@ -119,7 +119,7 @@ def list_archives(cfg: Config, page: str | None = None) -> list[Archive]:
     names, base = [], ARCHIVE_BASE
     try:
         if page.startswith("http"):
-            html = session(cfg).get(page, timeout=60).text
+            html = session(cfg, retries=2).get(page, timeout=30).text  # optional: don't wait long
         else:
             html = Path(page).read_text()
             base = str(Path(page).parent) + "/"

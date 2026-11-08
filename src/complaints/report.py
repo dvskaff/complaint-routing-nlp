@@ -91,7 +91,7 @@ def chart_confusion(cm: pd.DataFrame) -> str:
     share = cm.div(cm.sum(1).replace(0, np.nan), axis=0).fillna(0)
     names = [short(n) for n in cm.index]
     fig = go.Figure(go.Heatmap(z=share.to_numpy(), x=names, y=names, colorscale=[[0, "#f4f8fd"], [1, "#104281"]],
-                               zmin=0, zmax=1, text=[[f"{v:.0%}" if v >= 0.005 else "" for v in r] for r in share.to_numpy()],
+                               zmin=0, zmax=1, text=[[f"{v:.0%}" if v >= 0.02 else "" for v in r] for r in share.to_numpy()],
                                texttemplate="%{text}", textfont=dict(size=10),
                                customdata=cm.to_numpy(), colorbar=dict(title="share", tickformat=".0%"),
                                hovertemplate="Actual %{y} → routed to %{x}<br>%{z:.1%} (%{customdata:,} complaints)"
@@ -283,8 +283,8 @@ def build_site(cfg, run: dict, scores: dict, curves: dict, per_class: pd.DataFra
         _card("Accuracy", _p1(ft["accuracy"]), f"all test complaints · always-majority: {_p1(maj['accuracy'])}"),
         _card("Top-2 accuracy", _p1(ft["top2_accuracy"]), "right team among the two suggestions"),
         _card("Browser model", f"{run['onnx']['size_mb']:.0f} MB" if run["onnx"]["size_mb"] >= 10
-              else f"{run['onnx']['size_mb']:.1f} MB", f"8-bit ONNX, agrees with PyTorch on "
-              f"{run['onnx']['top1_agreement']:.1%} of complaints"),
+              else f"{run['onnx']['size_mb']:.1f} MB", f"8-bit ONNX, same routing decision as the full model "
+              f"on {run['onnx']['decision_agreement']:.1%} of complaints"),
         _card("Top emerging issue", html.escape(" · ".join(em["words"][:2])) if em else "–",
               f"{_pp(em['change_pts'])} share in the last {len(topics['recent_months'])} months" if em else ""),
     ])  # fmt: skip
@@ -387,7 +387,8 @@ correctly; the other {
 <p>Most errors are between products that genuinely overlap: a debt in collection is also on the credit report, and a
 scam payment involves both a bank account and a money-transfer app. Consumers pick the product themselves when they
 file, so some "errors" are arguably labeling choices.</p>
-<div class="grid2"><div>{chart_f1(per_class)}</div><div>{chart_confusion(cm)}</div></div>
+{chart_f1(per_class)}
+{chart_confusion(cm)}
 <h3>Most common mix-ups</h3>{
         _table(["Actual product", "Routed to", "Complaints", "Share of that product"], conf_rows, 2)
     }
@@ -469,13 +470,14 @@ test {w["test"][0]} to {w["test"][-1]}, so the model never sees the future.</li>
     } sentence embeddings +
 logistic regression; and the same MiniLM encoder fine-tuned end to end with a classification head (PyTorch, AdamW,
 linear warmup and decay, length-bucketed batches, best epoch by validation macro-F1).</li>
-<li><b>Calibration and policy:</b> prior correction + temperature scaling fitted on validation; the auto-route threshold
-is the lowest confidence whose validation accuracy still meets the target.</li>
+<li><b>Calibration and policy:</b> prior correction (its strength chosen on validation so small products are still
+predicted) + temperature scaling, fitted on validation; the auto-route threshold is the lowest confidence whose
+validation accuracy still meets the target.</li>
 <li><b>Topics:</b> BERTopic (UMAP + HDBSCAN + class-based TF-IDF) on the sentence embeddings of a natural monthly sample.</li>
 <li><b>Serving:</b> the fine-tuned model is exported to ONNX with calibration built in, quantized to 8-bit, checked against
-PyTorch ({run["onnx"]["top1_agreement"]:.1%} agreement on {
-        run["onnx"]["n"]
-    } validation complaints), and run in the browser
+PyTorch on {run["onnx"]["n"]:,} validation complaints (same routing decision on {
+        run["onnx"]["decision_agreement"]:.1%},
+same top team on {run["onnx"]["top1_agreement"]:.1%}; the differences are near-ties), and run in the browser
 with transformers.js and ONNX Runtime WebAssembly. No server.</li>
 <li><b>Automation:</b> GitHub Actions runs the pipeline on every change and checks the archive monthly; samples,
 embeddings, the fine-tuned model and topics are cached between runs, and a quality gate blocks publishing if accuracy,

@@ -139,10 +139,12 @@ def gate(cfg: Config, scores: dict, majority_acc: float, onnx_check: dict) -> li
         problems.append(
             f"fine-tuned accuracy {ft['accuracy']:.3f} is below always-majority {majority_acc:.3f}"
         )
+    if onnx_check["decision_agreement"] < cfg.min_onnx_decision_agreement:
+        problems.append(f"browser model makes the same routing decision as PyTorch on only "
+                        f"{onnx_check['decision_agreement']:.1%} of complaints")  # fmt: skip
     if onnx_check["top1_agreement"] < cfg.min_onnx_agreement:
-        problems.append(
-            f"browser model agrees with PyTorch on only {onnx_check['top1_agreement']:.1%} of complaints"
-        )
+        problems.append(f"browser model picks the same top team as PyTorch on only "
+                        f"{onnx_check['top1_agreement']:.1%} of complaints")  # fmt: skip
     base = cfg.cache_dir / "baseline.json"
     if base.exists():
         prev = json.loads(base.read_text()).get("macro_f1")
@@ -225,7 +227,7 @@ def run(cfg: Config) -> dict:
         scores[o.name] = {**evaluate.metrics(pt, y_test), "ece_uncalibrated": evaluate.ece(raw_t, y_test),
                           "routing": evaluate.routing(pt, y_test, thr), "seconds_train": o.seconds_train,
                           "ms_per_complaint": o.ms_per_complaint, "size_mb": o.size_mb,
-                          "temperature": cal.temperature, **o.info}  # fmt: skip
+                          "temperature": cal.temperature, "prior_strength": cal.prior_strength, **o.info}  # fmt: skip
         curves[o.name] = evaluate.coverage_curve(pt, y_test)
         probs[o.name] = pt
         r = scores[o.name]["routing"]
@@ -256,10 +258,12 @@ def run(cfg: Config) -> dict:
     web_dir = cfg.site_dir / "models" / model_id
     cfg.site_dir.mkdir(parents=True, exist_ok=True)
     export.export(model, tok, cals[FT_NAME], web_dir, cfg.max_tokens)
-    sample_texts = val["text"].sample(min(400, len(val)), random_state=cfg.seed).tolist()
-    onnx_check = export.parity(web_dir, model, tok, cals[FT_NAME], sample_texts, cfg.max_tokens)
-    log.info("Browser model: %.1f MB, agrees with PyTorch on %.1f%% of %d complaints", onnx_check["size_mb"],
-             onnx_check["top1_agreement"] * 100, onnx_check["n"])  # fmt: skip
+    sample_texts = val["text"].sample(min(1000, len(val)), random_state=cfg.seed).tolist()
+    onnx_check = export.parity(web_dir, model, tok, cals[FT_NAME], sample_texts, cfg.max_tokens,
+                               scores[FT_NAME]["routing"]["threshold"])  # fmt: skip
+    log.info("Browser model: %.1f MB, same top team as PyTorch on %.1f%% and same routing decision on %.1f%% of %d "
+             "complaints", onnx_check["size_mb"], onnx_check["top1_agreement"] * 100,
+             onnx_check["decision_agreement"] * 100, onnx_check["n"])  # fmt: skip
     problems = gate(cfg, scores, scores["Majority class"]["accuracy"], onnx_check)
     if problems:
         raise QualityGateError("Quality gate failed: " + "; ".join(problems))

@@ -64,12 +64,14 @@ def choose_threshold(probs: np.ndarray, y: np.ndarray, target: float) -> float:
     """
     conf = probs.max(1)
     order = np.argsort(-conf, kind="stable")
+    c = conf[order]
     correct = (probs.argmax(1) == y)[order]
     acc = np.cumsum(correct) / np.arange(1, len(correct) + 1)
-    ok = np.nonzero(acc >= target)[0]
+    group_end = np.r_[c[1:] < c[:-1], True]  # a threshold routes every complaint tied at that confidence
+    ok = np.nonzero((acc >= target) & group_end)[0]
     if len(ok) == 0:
         return 1.01
-    return float(conf[order][ok[-1]])
+    return float(c[ok[-1]])
 
 
 def routing(probs: np.ndarray, y: np.ndarray, threshold: float) -> dict:

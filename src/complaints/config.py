@@ -79,7 +79,9 @@ class Config:
     # ---- quality gate
     min_macro_f1: float = 0.45
     max_macro_f1_drop: float = 0.03
-    min_onnx_agreement: float = 0.98
+    min_onnx_agreement: float = 0.95  # same top team as PyTorch
+    min_onnx_decision_agreement: float = 0.97  # same action: auto-route to the same team, or human review
+    # (8-bit rounding flips some near-ties; a broken export - wrong tokenizer or label order - scores far lower)
     # ---- paths and modes
     backend: str = field(default_factory=lambda: os.environ.get("ROUTER_BACKEND", "real"))  # "fake" in tests
     fixture: bool = field(default_factory=lambda: bool(os.environ.get("ROUTER_FIXTURE")))
@@ -101,7 +103,7 @@ class Config:
             self.topic_size_per_month, self.min_train_per_product = 60, 20
             self.epochs, self.batch_size, self.max_tokens, self.embed_max_tokens = 5, 16, 48, 48
             self.learning_rate, self.topic_min_cluster, self.topic_min_recent_docs = 1.5e-3, 10, 3
-            self.min_macro_f1, self.min_onnx_agreement = 0.0, 0.9
+            self.min_macro_f1, self.min_onnx_agreement, self.min_onnx_decision_agreement = 0.0, 0.8, 0.8
 
     @property
     def cache_dir(self) -> Path:

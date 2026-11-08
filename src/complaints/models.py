@@ -307,27 +307,44 @@ def load_finetuned(path: Path):
 @dataclass
 class Calibration:
     temperature: float
-    bias: np.ndarray  # log(real product mix) - log(training mix)
+    bias: np.ndarray  # prior_strength * (log(real product mix) - log(training mix))
+    prior_strength: float = 1.0
 
     def apply(self, logits: np.ndarray) -> np.ndarray:
         """Calibrated log-probabilities."""
         return log_softmax(logits / self.temperature + self.bias, axis=1)
 
     def to_dict(self) -> dict:
-        return {"temperature": float(self.temperature), "bias": [float(b) for b in self.bias]}
+        return {"temperature": float(self.temperature), "prior_strength": float(self.prior_strength),
+                "bias": [float(b) for b in self.bias]}  # fmt: skip
 
 
-def fit_calibration(val_logits: np.ndarray, y_val: np.ndarray, y_train: np.ndarray, n_labels: int,
-                    prior: bool = True) -> Calibration:  # fmt: skip
-    """Prior correction (training is balanced, the real mix is not) + temperature by validation log-loss.
-    prior=False fits the temperature only (for inputs that are already prior-corrected)."""
-    prior_train = (np.bincount(y_train, minlength=n_labels) + 1.0) / (len(y_train) + n_labels)
-    prior_val = (np.bincount(y_val, minlength=n_labels) + 1.0) / (len(y_val) + n_labels)
-    bias = np.log(prior_val) - np.log(prior_train) if prior else np.zeros(n_labels)
-
+def _temperature(val_logits: np.ndarray, y_val: np.ndarray, bias: np.ndarray) -> float:
     def nll(log_t: float) -> float:
         lp = log_softmax(val_logits / math.exp(log_t) + bias, axis=1)
         return float(-lp[np.arange(len(y_val)), y_val].mean())
 
-    res = minimize_scalar(nll, bounds=(math.log(0.05), math.log(20.0)), method="bounded")
-    return Calibration(float(math.exp(res.x)), bias)
+    return float(math.exp(minimize_scalar(nll, bounds=(math.log(0.05), math.log(20.0)), method="bounded").x))
+
+
+def fit_calibration(val_logits: np.ndarray, y_val: np.ndarray, y_train: np.ndarray, n_labels: int,
+                    prior: bool = True, strengths=(0.0, 0.25, 0.5, 0.75, 1.0),
+                    tolerance: float = 0.005) -> Calibration:  # fmt: skip
+    """Prior correction (training is balanced, the real mix is not) + temperature by validation log-loss.
+
+    The full Bayes prior correction maximizes accuracy but can push a tiny product out of the predictions entirely
+    (it is never the most likely team). The correction's strength is therefore chosen on the validation month: the
+    strength with the best macro-F1 among those within `tolerance` of the best validation accuracy. Each strength
+    gets its own temperature. prior=False fits the temperature only (for inputs that are already prior-corrected).
+    """
+    prior_train = (np.bincount(y_train, minlength=n_labels) + 1.0) / (len(y_train) + n_labels)
+    prior_val = (np.bincount(y_val, minlength=n_labels) + 1.0) / (len(y_val) + n_labels)
+    shift = np.log(prior_val) - np.log(prior_train)
+    options = []
+    for a in strengths if prior else (0.0,):
+        bias = a * shift
+        cal = Calibration(_temperature(val_logits, y_val, bias), bias, a)
+        pred = cal.apply(val_logits).argmax(1)
+        options.append((cal, float((pred == y_val).mean()), f1_score(y_val, pred, average="macro")))
+    best_acc = max(acc for _, acc, _ in options)
+    return max((o for o in options if o[1] >= best_acc - tolerance), key=lambda o: (o[2], o[1]))[0]

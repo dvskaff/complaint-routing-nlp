@@ -72,6 +72,7 @@ def test_export_matches_pytorch_and_is_loadable(cfg, samples, tmp_path):
     assert conf["id2label"]["0"] == labels[0] and json.loads((out / "tokenizer_config.json").read_text())
     check = export.parity(out, m, tok, cal, va["text"].tolist()[:60], cfg.max_tokens)
     assert check["top1_agreement"] >= 0.9 and check["max_prob_diff"] < 0.1
+    assert check["decision_agreement"] == 1.0  # threshold 1.01: everything goes to review in both
     # the calibration is inside the graph: a variable-length batch gives calibrated logits directly
     s = ort.InferenceSession(str(out / "onnx" / "model_quantized.onnx"))
     enc = tok(

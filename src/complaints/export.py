@@ -76,8 +76,10 @@ def export(model, tokenizer, calibration, out: Path, max_tokens: int) -> Path:
     return out
 
 
-def parity(model_dir: Path, model, tokenizer, calibration, texts: list[str], max_tokens: int) -> dict:
-    """Agreement between the quantized ONNX model and PyTorch (+ calibration) on real validation complaints."""
+def parity(model_dir: Path, model, tokenizer, calibration, texts: list[str], max_tokens: int,
+           threshold: float = 1.01) -> dict:  # fmt: skip
+    """Agreement between the quantized ONNX model and PyTorch (+ calibration) on real validation complaints:
+    on the top team, and on the routing decision (auto-route to the same team, or both send to human review)."""
     import onnxruntime as ort
 
     from .models import predict_logits
@@ -97,7 +99,12 @@ def parity(model_dir: Path, model, tokenizer, calibration, texts: list[str], max
         onnx_p[i] = e / e.sum()
     ms = (time.time() - t0) / max(len(texts), 1) * 1000
     size = (model_dir / "onnx" / "model_quantized.onnx").stat().st_size / 1e6
+
+    def decide(p):
+        return np.where(p.max(1) >= threshold, p.argmax(1), -1)
+
     return {"n": len(texts), "top1_agreement": float((torch_p.argmax(1) == onnx_p.argmax(1)).mean()),
+            "decision_agreement": float((decide(torch_p) == decide(onnx_p)).mean()),
             "max_prob_diff": float(np.abs(torch_p - onnx_p).max()), "size_mb": size, "ms_per_complaint": ms}  # fmt: skip
 
 
