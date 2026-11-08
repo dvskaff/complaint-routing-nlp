@@ -35,13 +35,13 @@ Protection Bureau (CFPB).
 Rewritten automatically after every pipeline run.
 
 <!-- RESULTS:START -->
-_CFPB narrative archive · trained on 2025-08 to 2026-04 (16,500 complaints), tested on 2026-06 to 2026-07 (16,000 complaints, real product mix) · 11 products · last run 2026-11-08 05:50 UTC_
+_CFPB narrative archive · trained on 2025-08 to 2026-04 (16,500 complaints), tested on 2026-06 to 2026-07 (16,000 complaints, real product mix) · 11 products · last run 2026-11-08 22:32 UTC_
 
 | Model (test months) | Accuracy | Macro-F1 | Auto-routed at 95% target | Accuracy when auto-routed |
 |---|---|---|---|---|
 | Majority class | 29.0% | 0.041 | 0.0% | – |
 | TF-IDF + logistic regression | 81.4% | 0.745 | 57.1% | 94.4% |
-| Sentence embeddings + logistic regression | 78.8% | 0.691 | 53.2% | 93.7% |
+| Sentence embeddings + logistic regression | 78.8% | 0.691 | 53.2% | 93.8% |
 | **Fine-tuned MiniLM transformer** | 81.2% | 0.742 | 58.0% | 94.7% |
 | Ensemble: fine-tuned + TF-IDF | 83.0% | 0.766 | 65.4% | 94.4% |
 
